@@ -59,6 +59,7 @@ type Client struct {
 }
 
 type Options struct {
+	SeedHelper         string
 	ExtraArgs          []string
 	Platform           string
 	FilestoreDir       string
@@ -643,12 +644,12 @@ func closeFiles(files []*os.File) {
 }
 
 func (c *Client) openPlatformDevice() (*os.File, error) {
-	if c.Options.Platform != "kvm" {
+	if c.Options.Platform != "kvm" && c.Options.Platform != "slimvm" {
 		return nil, nil
 	}
 	devicePath := c.Options.PlatformDevicePath
 	if devicePath == "" {
-		devicePath = "/dev/kvm"
+		devicePath = "/dev/" + c.Options.Platform
 	}
 	device, err := os.OpenFile(devicePath, os.O_RDWR, 0)
 	if err != nil {

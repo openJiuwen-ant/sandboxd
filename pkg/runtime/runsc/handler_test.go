@@ -201,6 +201,8 @@ func (l staticOciLoader) GenerateOci(runtimecore.OciLoadOptions) (string, *runti
 
 type successfulRunscClient struct{}
 
+func (successfulRunscClient) Fork(context.Context, string, runtimecore.StartConfig) error { return nil }
+
 func (successfulRunscClient) Create(context.Context, StartArgs) error { return nil }
 func (successfulRunscClient) Start(context.Context, StartArgs) error  { return nil }
 func (successfulRunscClient) Checkpoint(context.Context, string, string, bool, bool) error {

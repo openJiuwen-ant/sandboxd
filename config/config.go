@@ -31,6 +31,7 @@ const (
 const (
 	RunscPlatformSystrap = "systrap"
 	RunscPlatformKVM     = "kvm"
+	RunscPlatformSlimVM  = "slimvm"
 )
 
 // Config contains all configurations for sandbox server.
@@ -192,6 +193,8 @@ type RuntimeConfig struct {
 
 // RunscConfig contains options passed to the gVisor runsc adapter.
 type RunscConfig struct {
+	// SeedHelper is the optional host binary built alongside the seed-capable runsc.
+	SeedHelper string `toml:"seed_helper" json:"seedHelper"`
 	// RestoreConcurrency bounds simultaneous restore Start RPCs, including
 	// filesystem preparation. Omitted or zero disables throttling; valid
 	// positive values are 1..1024.
@@ -348,13 +351,13 @@ func NormalizeRunscPlatform(value string) (string, error) {
 	switch normalized := strings.ToLower(strings.TrimSpace(value)); normalized {
 	case "", RunscPlatformSystrap:
 		return RunscPlatformSystrap, nil
-	case RunscPlatformKVM:
-		return RunscPlatformKVM, nil
+	case RunscPlatformKVM, RunscPlatformSlimVM:
+		return normalized, nil
 	default:
 		return "", fmt.Errorf(
-			"runsc platform must be %q or %q, got %q",
+			"runsc platform must be %q, %q or %q, got %q",
 			RunscPlatformSystrap,
-			RunscPlatformKVM,
+			RunscPlatformKVM, RunscPlatformSlimVM,
 			value,
 		)
 	}

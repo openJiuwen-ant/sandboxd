@@ -31,6 +31,7 @@ func TestNormalizeRunscPlatform(t *testing.T) {
 		{input: "", want: RunscPlatformSystrap},
 		{input: " systrap ", want: RunscPlatformSystrap},
 		{input: "KVM", want: RunscPlatformKVM},
+		{input: "SlimVM", want: RunscPlatformSlimVM},
 		{input: "ptrace", wantErr: true},
 		{input: "systrap|kvm", wantErr: true},
 	} {

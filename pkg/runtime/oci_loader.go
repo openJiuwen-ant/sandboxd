@@ -182,7 +182,7 @@ func (r *BundleLoader) GenerateOci(options OciLoadOptions) (string, *Spec, error
 		ociSpec.Linux.CgroupsPath = ""
 		ociSpec.Linux.Resources = nil
 	} else {
-		setSpecResource(ociSpec, options.Config.Resources)
+		ociSpec.Linux.Resources = OCIResources(ociSpec.Linux.Resources, options.Config.Resources)
 	}
 	if _, ok := ociSpec.Annotations[IgnoreResourceFieldAnnoKey]; ok {
 		logrus.Debugf("ignore resource field for %v", options.SandboxID)
@@ -365,59 +365,62 @@ func LoadSpec(baseFile string) (*Spec, error) {
 }
 
 // init supported resource.
-func setSpecResource(spec *Spec, resource *runtime.LinuxSandboxResources) {
-	// set resource.
-	if spec.Linux.Resources == nil {
-		spec.Linux.Resources = &LinuxResources{}
+// OCIResources applies the sandbox limits to the OCI bundle resource record.
+func OCIResources(existing *LinuxResources, resource *runtime.LinuxSandboxResources) *LinuxResources {
+	if resource == nil {
+		return existing
+	}
+	if existing == nil {
+		existing = &LinuxResources{}
 	}
 
-	if spec.Linux.Resources.CPU == nil {
-		spec.Linux.Resources.CPU = &LinuxCPU{}
+	if existing.CPU == nil {
+		existing.CPU = &LinuxCPU{}
 	}
 
-	if spec.Linux.Resources.Memory == nil {
-		spec.Linux.Resources.Memory = &LinuxMemory{}
+	if existing.Memory == nil {
+		existing.Memory = &LinuxMemory{}
 	}
 
-	if spec.Linux.Resources.Network == nil {
-		spec.Linux.Resources.Network = &LinuxNetwork{}
+	if existing.Network == nil {
+		existing.Network = &LinuxNetwork{}
 	}
 
-	if spec.Linux.Resources.HugepageLimits == nil {
-		spec.Linux.Resources.HugepageLimits = []LinuxHugepageLimit{}
+	if existing.HugepageLimits == nil {
+		existing.HugepageLimits = []LinuxHugepageLimit{}
 	}
 
-	if spec.Linux.Resources.Unified == nil {
-		spec.Linux.Resources.Unified = map[string]string{}
+	if existing.Unified == nil {
+		existing.Unified = map[string]string{}
 	}
 
 	// set value.
 	// CPU
 	if resource.CpuShares > 0 {
-		spec.Linux.Resources.CPU.Shares = &resource.CpuShares
+		existing.CPU.Shares = &resource.CpuShares
 	}
 	if resource.CpuQuota > 0 {
-		spec.Linux.Resources.CPU.Quota = &resource.CpuQuota
+		existing.CPU.Quota = &resource.CpuQuota
 	}
 	if resource.CpuPeriod > 0 {
-		spec.Linux.Resources.CPU.Period = &resource.CpuPeriod
+		existing.CPU.Period = &resource.CpuPeriod
 	}
 	if resource.CpusetCpus != "" {
-		spec.Linux.Resources.CPU.Cpus = resource.CpusetCpus
+		existing.CPU.Cpus = resource.CpusetCpus
 	}
 
 	// Memory
 	if resource.MemorySwapLimitInBytes > 0 {
-		spec.Linux.Resources.Memory.Swap = &resource.MemorySwapLimitInBytes
+		existing.Memory.Swap = &resource.MemorySwapLimitInBytes
 	}
 	if resource.MemoryLimitInBytes > 0 {
-		spec.Linux.Resources.Memory.Limit = &resource.MemoryLimitInBytes
+		existing.Memory.Limit = &resource.MemoryLimitInBytes
 	}
 
 	// Hugepage
 	if resource.HugepageLimits != nil {
 		for _, limit := range resource.HugepageLimits {
-			spec.Linux.Resources.HugepageLimits = append(spec.Linux.Resources.HugepageLimits, LinuxHugepageLimit{
+			existing.HugepageLimits = append(existing.HugepageLimits, LinuxHugepageLimit{
 				Pagesize: limit.PageSize,
 				Limit:    limit.Limit,
 			})
@@ -427,9 +430,10 @@ func setSpecResource(spec *Spec, resource *runtime.LinuxSandboxResources) {
 	// Unified
 	if resource.Unified != nil {
 		for k, v := range resource.Unified {
-			spec.Linux.Resources.Unified[k] = v
+			existing.Unified[k] = v
 		}
 	}
+	return existing
 }
 
 func combineAnnotations(annotations map[string]string, annoToAdd map[string]string) map[string]string {

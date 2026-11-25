@@ -88,6 +88,8 @@ sync_output = false
 # Systrap is the default. Select kvm only when /dev/kvm is usable.
 [plugin.runtime.runsc]
 platform = "systrap"
+# A matching host helper enables Start(template_id) on a kvm or slimvm node.
+# seed_helper = "/opt/seed-runtime/runsc-seed"
 # Return before all checkpoint memory has loaded; retain restore input files.
 background_restore = false
 # Use "reflink" only when live filestores and checkpoints share a filesystem

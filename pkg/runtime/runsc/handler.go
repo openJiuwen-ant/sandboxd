@@ -59,6 +59,7 @@ type Handler struct {
 }
 
 type runscClient interface {
+	Fork(context.Context, string, runtimecore.StartConfig) error
 	Create(context.Context, StartArgs) error
 	Start(context.Context, StartArgs) error
 	Checkpoint(context.Context, string, string, bool, bool) error
@@ -100,6 +101,7 @@ func NewHandler(cfg config.Config, bin string, loader runtimecore.OciLoader) (*H
 
 	return &Handler{
 		runsc: NewClientWithOptions(bin, runscRoot, Options{
+			SeedHelper:         cfg.RuntimeConfig.Runsc.SeedHelper,
 			ExtraArgs:          cfg.RuntimeConfig.Runsc.ExtraArgs,
 			Platform:           platform,
 			FilestoreDir:       cfg.RuntimeConfig.FilestoreDir,
@@ -133,6 +135,13 @@ func (r *Handler) Start(ctx context.Context, config runtimecore.StartConfig) (re
 	traceID, _ := trace.GetContextID(ctx)
 	if config.Network == nil {
 		return fmt.Errorf("network is required")
+	}
+	if config.TemplateID != "" {
+		bundle, err := util.JoinWithinRoot(r.sandboxRoot, config.ID)
+		if err != nil {
+			return err
+		}
+		return r.runsc.Fork(ctx, bundle, config)
 	}
 	config, managedFilestores, err := r.prepareFileBackedTmpfs(config)
 	if err != nil {

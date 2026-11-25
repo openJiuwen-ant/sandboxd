@@ -234,3 +234,48 @@ It is cleaned by normal or idempotent sandbox deletion.
 Periodic runtime inventories run concurrently with independent ten-second budgets. A failed or timed-out inventory closes admission and removes only that runtime class from `ListAvailableRuntimes`; existing sandbox metadata and status remain intact. A later successful inventory reopens the class. Delete and cleanup operations remain available during degradation. A handler that ignores cancellation cannot accumulate overlapping inventory calls across passes.
 
 Process readiness checks recovery, resource/image/storage modules and the result of local housekeeping. Failed local metadata reads, status persistence or recycled-path cleanup close readiness until a successful pass. A completed successful pass taking more than five seconds emits a latency warning without closing admission afterward: checkpoint writeback can delay a small status-file sync even when the runtime and resource inventory remain healthy. Time spent waiting for external runtime inventories is accounted separately, so a slow `runsc list` cannot mark an otherwise healthy Firecracker/PVM service unready. Runtime inventory warnings identify the affected class. Backend, capacity freshness and restore compatibility checks remain enforced.
+
+## Forking from a live runsc seed
+
+An administrator can prepare a trusted single-container EROFS workload on a KVM or SlimVM node and fork it through the Start RPC. Seed initialization runs before the Sentry installs seccomp. Choose an initialized process, memory contents and files suitable for all callers with access to that template. The seed must reach its barrier without creating network endpoints. It opens `/proc/gvisor/checkpoint` read-write, writes `1`, then reads `restore\n` on the same descriptor in each child.
+
+Build the host helper and complete runsc bundle from the same gVisor source. Run these commands from the sandboxd checkout using a fresh sibling checkout for the Bazel build.
+
+```sh
+git clone https://github.com/openJiuwen-ant/gvisor ../gvisor-seed
+git -C ../gvisor-seed checkout 6497d3baed5774d418fdfd366035dab17ed40ed2
+cp -R tools/runsc-seed/_bazel ../gvisor-seed/runsc/sandboxd_seed
+(cd ../gvisor-seed && make DOCKER_BUILD=false build BAZEL_OPTIONS="--config=x86_64" OPTIONS="-c opt" TARGETS="//runsc/sandboxd_seed:runsc-seed //:release")
+install -d /opt/seed-runtime
+cp -RL ../gvisor-seed/bazel-bin/release/. /opt/seed-runtime/
+install -m 0755 ../gvisor-seed/bazel-bin/runsc/sandboxd_seed/runsc-seed_/runsc-seed /opt/seed-runtime/
+```
+
+Configure the node to use the matching binaries. KVM needs a working `/dev/kvm`. For SlimVM set the node and helper platform to `slimvm` on a host with a working `/dev/slimvm`.
+
+```toml
+[plugin.runtime.runsc]
+platform = "kvm"
+seed_helper = "/opt/seed-runtime/runsc-seed"
+
+[plugin.runtime.runtime_binary]
+runsc = "/opt/seed-runtime/runsc"
+```
+
+Create the seed after sandboxd initializes node state. Use the same runsc state root (`<rootDir>/runsc`) as the daemon. The example assumes a trusted OCI bundle with an absolute EROFS source in `dev.gvisor.spec.rootfs.source` and `erofs` in `dev.gvisor.spec.rootfs.type`. Build native executables into the image with `mkfs.erofs -E noinline_data`. Provide the desired hosts file and resolver in the seed. A seed on a managed DNS node should use the bridge DNS proxy.
+
+```sh
+bin=/opt/seed-runtime
+root=/var/lib/sandboxd/root/runsc
+bundle=/srv/seeds/python
+"$bin/runsc-seed" --runsc="$bin/runsc" --root="$root" --platform=kvm --network=none --directfs=false --ignore-cgroups --bundle="$bundle" --stdout="$bundle/seed.out" --stderr="$bundle/seed.err" create python-warm
+sbox start --template-id python-warm --sandbox-id sbox-python-a --env TASK=example
+sbox delete sbox-python-a
+"$bin/runsc-seed" --runsc="$bin/runsc" --root="$root" delete python-warm
+```
+
+Each child gets a sandboxd ID, a TAP and a cgroup when cgroup management is enabled. Guest CPU topology, credentials, command, cwd, root and mount topology come from the seed. Resource requests apply to the child host cgroup. The application can read per-child environment values from `/proc/gvisor/spec_environ` after the barrier. Standard streams use append-mode regular files, defaulting to `stdout.log` and `stderr.log` in the child bundle. A fork rejects process, rootfs and mount overrides. Seed-compatible EROFS and tmpfs mounts are inherited. Live host binds would require per-child Gofer attachment.
+
+Keep the seed and its backing files alive until all children have been deleted. Losing a seed worker or deleting the template terminates its family. Recreate templates after a node reboot. Full checkpoint/destroy/restore of forked children requires separate qualification.
+
+Run `test/e2e/seed-fork.sh` with `SOCKET`, `RUNSC_ROOT`, `RUNSC_BINARY` and `SEED_HELPER` on the configured node. It checks inherited state, sibling write isolation, per-child environment, TCP over separate TAPs and independent deletion.

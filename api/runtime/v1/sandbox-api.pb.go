@@ -1363,9 +1363,8 @@ type StartRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// SandboxID is an optional caller-provided sandbox ID. sandboxd generates one when empty.
 	SandboxID string `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
-	// TemplateID is reserved for API compatibility with downstream builds that
-	// can start from pre-registered sandbox templates. The open-source runtime
-	// path does not implement template reuse and ignores this field.
+	// TemplateID forks a node-local, administrator-prepared runsc seed. The seed supplies the rootfs and process.
+	// Forked children default stdout and stderr to regular files in their own bundle.
 	TemplateID string `protobuf:"bytes,2,opt,name=template_id,json=templateId,proto3" json:"template_id,omitempty"`
 	// Runtime is the runtime handler name, such as runsc.
 	Runtime string `protobuf:"bytes,3,opt,name=runtime,proto3" json:"runtime,omitempty"`

@@ -30,6 +30,7 @@ var StartCmd = cli.Command{
 	Usage:     "start a sandbox",
 	ArgsUsage: "[command] [args...]",
 	Flags: []cli.Flag{
+		cli.StringFlag{Name: "template-id", Usage: "fork an administrator-prepared runsc seed"},
 		cli.StringFlag{
 			Name:  "runtime",
 			Usage: "sandbox runtime handler name",
@@ -114,13 +115,18 @@ var StartCmd = cli.Command{
 		},
 	},
 	Action: func(context *cli.Context) error {
-		rootfs, err := startRootfs(
-			context.String("rootfs"),
-			context.String("image-url"),
-			context.Bool("rootfs-readonly"),
-		)
-		if err != nil {
-			return err
+		templateID := context.String("template-id")
+		var rootfs *runtime.RootfsConfig
+		var err error
+		if templateID == "" || context.IsSet("rootfs") || context.IsSet("image-url") || context.IsSet("rootfs-readonly") {
+			rootfs, err = startRootfs(context.String("rootfs"), context.String("image-url"), context.Bool("rootfs-readonly"))
+			if err != nil {
+				return err
+			}
+		}
+		cwd := context.String("cwd")
+		if templateID != "" && !context.IsSet("cwd") {
+			cwd = ""
 		}
 		requestedID := context.String("sandbox-id")
 		if requestedID != "" && !config.IsValidSandboxID(requestedID) {
@@ -131,7 +137,7 @@ var StartCmd = cli.Command{
 		}
 
 		command := context.Args()
-		if len(command) == 0 {
+		if templateID == "" && len(command) == 0 {
 			command = []string{"/bin/sleep", "3600"}
 		}
 
@@ -182,11 +188,12 @@ var StartCmd = cli.Command{
 		defer client.Close()
 
 		resp, err := client.StartSandbox(&runtime.StartRequest{
+			TemplateID:              templateID,
 			SandboxID:               requestedID,
 			Runtime:                 context.String("runtime"),
 			Rootfs:                  rootfs,
 			Command:                 command,
-			Cwd:                     context.String("cwd"),
+			Cwd:                     cwd,
 			Envs:                    envs,
 			Mounts:                  mounts,
 			Resources:               resources,

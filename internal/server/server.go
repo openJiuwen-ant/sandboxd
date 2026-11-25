@@ -1285,6 +1285,12 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		return &runtime.StartResponse{Code: -1, Message: err.Error()}, err
 	}
 	startReq := proto.Clone(request).(*runtime.StartRequest)
+	fork := startReq.TemplateID != ""
+	if fork {
+		if err := validateSeedRequest(startReq, h.config.RuntimeConfig.Runsc); err != nil {
+			return &runtime.StartResponse{Code: -1, Message: err.Error()}, errord.ToGRPC(err)
+		}
+	}
 	checkpointDir := ""
 	var err error
 	if startReq.CheckpointInfo != nil {
@@ -1346,7 +1352,7 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 				errord.ToGRPC(fmt.Errorf("%v: %w", err, errord.ErrInvalidArgument))
 		}
 	}
-	if startReq.Rootfs == nil {
+	if !fork && startReq.Rootfs == nil {
 		err := fmt.Errorf("rootfs is required")
 		return &runtime.StartResponse{Code: -1, Message: err.Error()}, err
 	}
@@ -1365,7 +1371,7 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 				errord.ToGRPC(fmt.Errorf("%v: %w", err, errord.ErrInvalidArgument))
 		}
 	}
-	if rootfsLimit := startReq.Rootfs.WritableLayerSizeBytes; rootfsLimit > 0 {
+	if rootfsLimit := startReq.Rootfs.GetWritableLayerSizeBytes(); rootfsLimit > 0 {
 		if startReq.WritableLayerLimitBytes > 0 && startReq.WritableLayerLimitBytes != rootfsLimit {
 			err := fmt.Errorf(
 				"conflicting writable layer limits: start request has %d bytes, rootfs has %d bytes",
@@ -1377,14 +1383,14 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		}
 		startReq.WritableLayerLimitBytes = rootfsLimit
 	}
-	if startReq.Cwd == "" {
+	if !fork && startReq.Cwd == "" {
 		startReq.Cwd = "/"
 	}
-	if startReq.Stdout == "" {
+	if !fork && startReq.Stdout == "" {
 		logrus.Warnf("stdout path is empty for sandbox %q; discarding stdout to %s", startReq.SandboxID, os.DevNull)
 		startReq.Stdout = os.DevNull
 	}
-	if startReq.Stderr == "" {
+	if !fork && startReq.Stderr == "" {
 		logrus.Warnf("stderr path is empty for sandbox %q; discarding stderr to %s", startReq.SandboxID, os.DevNull)
 		startReq.Stderr = os.DevNull
 	}
@@ -1499,6 +1505,15 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		}, errord.ToGRPC(err)
 	}
 	startReq.SandboxID = sandboxID
+	if fork {
+		bundle := filepath.Join(h.config.RootDir, "containers", sandboxID)
+		if startReq.Stdout == "" {
+			startReq.Stdout = filepath.Join(bundle, "stdout.log")
+		}
+		if startReq.Stderr == "" {
+			startReq.Stderr = filepath.Join(bundle, "stderr.log")
+		}
+	}
 	owner, managedRelease, claimErr := h.claimManagedSandbox(ctx, sandboxID, startReq.Labels[managedCollectionLabel])
 	managedOwnerRelease = managedRelease
 	err = claimErr
@@ -1594,6 +1609,10 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 	fsCh := make(chan fsPrepareResult, 1)
 	resourceCh := make(chan resourcePrepareResult, 1)
 	go func() {
+		if fork {
+			fsCh <- fsPrepareResult{}
+			return
+		}
 		preparedFS, err := h.fsMgr.Prepare(ctx, startReq)
 		fsCh <- fsPrepareResult{fs: preparedFS, err: err}
 	}()
@@ -1632,7 +1651,11 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		xpuAcquired = specUpdates != nil
 	}
 
-	env := mergeStartEnvs(preparedFilesystem.rootfs.RootFS.Env(), startReq.Envs, startReq.PreferImagePath)
+	var imageEnv []string
+	if preparedFilesystem != nil {
+		imageEnv = preparedFilesystem.rootfs.RootFS.Env()
+	}
+	env := mergeStartEnvs(imageEnv, startReq.Envs, startReq.PreferImagePath)
 	var imageProcess *imageProcessSpec
 	if startReq.InjectEntrypoint != "" {
 		resolvedImageProcess, resolveErr := preparedFilesystem.rootfs.RootFS.ResolveImageProcess(ctx)
@@ -1652,7 +1675,8 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 	}
 
 	annotations := copyStringMap(startReq.Labels)
-	if annotations == nil {
+	// Keep the trusted seed OCI annotations. Caller labels are stored in SandboxMetadata.
+	if annotations == nil || fork {
 		annotations = make(map[string]string)
 	}
 	for key, value := range preparedResources.ToLabels() {
@@ -1693,27 +1717,30 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		}
 		aclRegistered = true
 	}
-	sandboxFiles, err = h.prepareSandboxFiles(
-		sandboxID,
-		defaults,
-		preparedResources.network.Ip,
-		aclEnabled,
-		preparedFilesystem.Mounts(),
-		imageProcess,
-		startReq.InjectEntrypoint,
-		sandboxHostsPolicy{
-			runtime:       startReq.Runtime,
-			rootReadonly:  svc.EffectiveRootReadonly(startReq.Rootfs.GetReadonly(), startReq.WritableLayerLimitBytes, specUpdates),
-			checkpointDir: checkpointDir,
-		},
-	)
-	if err != nil {
-		return &runtime.StartResponse{
-			Code:    -1,
-			Message: fmt.Sprintf("failed to prepare sandbox files: %v", err),
-		}, err
+	if !fork {
+		sandboxFiles, err = h.prepareSandboxFiles(
+			sandboxID,
+			defaults,
+			preparedResources.network.Ip,
+			aclEnabled,
+			preparedFilesystem.Mounts(),
+			imageProcess,
+			startReq.InjectEntrypoint,
+			sandboxHostsPolicy{
+				runtime:       startReq.Runtime,
+				rootReadonly:  svc.EffectiveRootReadonly(startReq.Rootfs.GetReadonly(), startReq.WritableLayerLimitBytes, specUpdates),
+				checkpointDir: checkpointDir,
+			},
+		)
+		if err != nil {
+			return &runtime.StartResponse{
+				Code:    -1,
+				Message: fmt.Sprintf("failed to prepare sandbox files: %v", err),
+			}, err
+		}
 	}
 	runtimeConfig := svc.StartConfig{
+		TemplateID:              startReq.TemplateID,
 		ID:                      sandboxID,
 		Hostname:                defaults.Hostname,
 		Command:                 startReq.Command,
@@ -1746,6 +1773,9 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		}, startFailure(ctx, "runtime start ("+startReq.Runtime+")", err)
 	}
 	runtimeStarted = true
+	if fork && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	// If Ports are specified, set up DNAT rules using sandbox IP from startSandboxRuntime.
 	if len(startReq.Ports) > 0 {
@@ -1764,13 +1794,15 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		dnatConfigured = true
 	}
 
-	if err := h.fsMgr.Commit(sandboxID, preparedFilesystem); err != nil {
-		return &runtime.StartResponse{
-			Code:    -1,
-			Message: fmt.Sprintf("Failed to commit filesystem state: %v", err),
-		}, err
+	if preparedFilesystem != nil {
+		if err := h.fsMgr.Commit(sandboxID, preparedFilesystem); err != nil {
+			return &runtime.StartResponse{
+				Code:    -1,
+				Message: fmt.Sprintf("Failed to commit filesystem state: %v", err),
+			}, err
+		}
+		filesystemCommitted = true
 	}
-	filesystemCommitted = true
 	metadata := &runtime.SandboxMetadata{
 		ID:             sandboxID,
 		RuntimeHandler: startReq.Runtime,

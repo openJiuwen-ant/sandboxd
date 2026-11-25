@@ -81,6 +81,7 @@ type StartRequestValidator interface {
 }
 
 type StartConfig struct {
+	TemplateID              string
 	ID                      string
 	Hostname                string
 	Command                 []string
